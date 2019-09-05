@@ -2,11 +2,12 @@ package controller
 
 import (
 	"database/sql"
-	"fmt"
 	"net/http"
 	"regexp"
 	"time"
 
+	// "encoding/base64"
+	"fmt"
 	"strconv"
 
 	"github.com/Michin0suke/prizz-api/src/model"
@@ -14,54 +15,19 @@ import (
 	"github.com/go-sql-driver/mysql"
 )
 
-func category_contain(s string) bool {
-	list := []string{
-		"appliance",
-		"baby",
-		"books",
-		"cash",
-		"cosmetics",
-		"daily",
-		"fashion",
-		"foods",
-		"gift",
-		"goods",
-		"kitchen",
-		"movie",
-		"sports",
-		"stationery",
-		"ticket",
-		"toy",
-		"travel",
-		"vehicle",
-		"other",
-	}
-
-	for _, elem := range list {
-		if s == elem {
-			return true
-		}
-	}
-	return false
-}
-
-func convOrder(order string) string {
-	switch order {
-	case "new":
-		return "created_at DESC"
-	case "winner":
-		return "winner DESC"
-	default:
-		return "limit_date ASC"
-	}
-}
-
 func errorJson(c *gin.Context, s string, err string) {
 	c.JSON(http.StatusBadRequest, gin.H{"error": s})
 	panic(err)
 }
 
-func generateJson(c *gin.Context, query string) {
+func addCORS(ctx *gin.Context) {
+	// ctx.Header("Access-Control-Allow-Origin", "*")
+	// ctx.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+	// ctx.Header("Access-Control-Max-Age", "86400")
+	// ctx.Header("Access-Control-Allow-Headers", "Access-Control-Allow-Headers, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+}
+
+func generateJson(c *gin.Context, query string, isSearch bool) {
 	limit := "10"
 	r := regexp.MustCompile(`\d+,\d+`)
 
@@ -72,21 +38,21 @@ func generateJson(c *gin.Context, query string) {
 			_, err := strconv.Atoi(limit)
 
 			if err != nil {
-				errorJson(c, err.Error(), err.Error())
+				errorJson(c, "Parameter [ limit ] is invalid.", err.Error())
 			}
 		}
 	}
 
-	is_raw := false
+	isRaw := false
 	if c.Query("raw") == "true" {
-		is_raw = true
+		isRaw = true
 	}
 
 	db := model.DBConnect()
 	result, err := db.Query(query + " LIMIT " + limit)
 
 	if err != nil {
-		errorJson(c, err.Error(), err.Error())
+		errorJson(c, "An error occurred in the database connection.", err.Error())
 	}
 
 	// json返却用
@@ -123,18 +89,20 @@ func generateJson(c *gin.Context, query string) {
 			&isOneclick,
 		)
 		if err != nil {
-			errorJson(c, err.Error(), err.Error())
+			errorJson(c, "An error occurred while scanning from the database.", err.Error())
 		}
 
 		strID := strconv.Itoa(int(id))
-		// fmt.Println("SELECT category FROM categories WHERE id = " + strID)
 		result, err := db.Query("SELECT category FROM categories WHERE id = " + strID)
 		if err != nil {
-			errorJson(c, err.Error(), err.Error())
+			errorJson(c, "An error occurred in the SQL related to the category table.", err.Error())
 		}
 		for result.Next() {
 			var category string
 			err = result.Scan(&category)
+			if err != nil {
+				errorJson(c, "An error occurred when scanning category data from the database.", err.Error())
+			}
 			categories = append(categories, category)
 		}
 
@@ -148,14 +116,16 @@ func generateJson(c *gin.Context, query string) {
 			twitterWays = append(twitterWays, twitterWay)
 		}
 
-		if is_raw {
+		if isRaw {
 			result, err = db.Query("SELECT raw FROM twitter WHERE id = " + strID)
 			if err != nil {
-				errorJson(c, err.Error(), err.Error())
+				errorJson(c, "An error occurred in the SQL related to the twitter_raw data.", err.Error())
 			}
 			for result.Next() {
 				err = result.Scan(&twitterRaw)
-				fmt.Println(twitterRaw)
+				if err != nil {
+					errorJson(c, "An error occurred when scanning twitter_raw data from the database.", err.Error())
+				}
 			}
 		}
 
@@ -168,7 +138,6 @@ func generateJson(c *gin.Context, query string) {
 			content.ImageURL = ""
 		}
 		content.CreatedAt = createdAt
-		fmt.Print(updatedAt)
 		if updatedAt.Valid {
 			content.UpdatedAt = updatedAt.Time
 		} else {
@@ -195,54 +164,151 @@ func generateJson(c *gin.Context, query string) {
 		contents = append(contents, content)
 	}
 	defer db.Close()
-	c.JSON(http.StatusOK, gin.H{"contents": contents})
-}
 
-// タスク一覧
-func DeadlineGET(c *gin.Context) {
-	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY limit_date ASC")
-}
-
-func NewGET(c *gin.Context) {
-	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY created_at DESC")
-}
-
-func WinnerGET(c *gin.Context) {
-	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY winner DESC")
-}
-
-func CategoryGET(c *gin.Context) {
-	order := convOrder(c.Query("order"))
-
-	category := c.Param("category")
-	if !category_contain(category) {
-		errorJson(c, "Invalid category", "Invalid category: "+category)
+	if isSearch {
+		c.JSON(http.StatusOK, contents[0])
+	} else {
+		c.JSON(http.StatusOK, contents)
 	}
+	// c.JSON(http.StatusOK, gin.H{"contents": contents})
+}
+
+func convCategory(s string) string {
+	list := []string{
+		"appliance",
+		"baby",
+		"books",
+		"cash",
+		"cosmetics",
+		"daily",
+		"fashion",
+		"foods",
+		"gift",
+		"goods",
+		"kitchen",
+		"movie",
+		"sports",
+		"stationery",
+		"ticket",
+		"toy",
+		"travel",
+		"vehicle",
+		"other",
+	}
+
+	if s == "" {
+		return ""
+	}
+
+	for _, elem := range list {
+		if s == elem {
+			return " AND category = '" + elem + "'"
+		}
+	}
+	return "error"
+}
+
+func convOrder(order string) string {
+	switch order {
+	case "new":
+		return "created_at DESC"
+	case "winner":
+		return "winner DESC"
+	default:
+		return "limit_date ASC"
+	}
+}
+
+func ContentsGET(c *gin.Context) {
+	addCORS(c)
+	order := convOrder(c.Query("order"))
+	category := convCategory(c.Query("category"))
+
+	if category == "error" {
+		errorJson(c, "parameter [ category ] is invalid.", "parameter [ category ] is invalid.")
+	}
+
+	way := ""
+	if c.Query("way") != "" {
+		way = " AND way = '" + c.Query("way") + "'"
+	}
+
+	// if c.Query("way") != "" {
+	// 	r := regexp.MustCompile(`%`)
+
+	// 	if r.MatchString(c.Query("way")) {
+	// 		wayQuery, err := base64.StdEncoding.DecodeString(c.Query("way"))
+
+	// 		if err != nil {
+	// 			errorJson(c, "An error occurred when decode from base64", err.Error())
+	// 		} else {
+	// 			way = " AND way = '" + string(wayQuery) + "'"
+	// 		}
+
+	// 	} else {
+	// 		way = " AND way = '" + c.Query("way") + "'"
+	// 	}
+	// }
 
 	query := `
 	SELECT DISTINCT c1.id, name, winner, image_url, created_at, updated_at, limit_date, link, provider, way, is_oneclick 
 	FROM contents c1 
 	LEFT OUTER JOIN categories c2 ON c1.id = c2.id 
-	WHERE category = '` + category + `' AND limit_date > CURRENT_TIMESTAMP 
+	WHERE limit_date > CURRENT_TIMESTAMP ` + category + way + `
 	ORDER BY ` + order
 
-	generateJson(c, query)
+	fmt.Println(query)
+
+	generateJson(c, query, false)
 }
 
+// タスク一覧
+// func DeadlineGET(c *gin.Context) {
+// 	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY limit_date ASC")
+// }
+
+// func NewGET(c *gin.Context) {
+// 	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY created_at DESC")
+// }
+
+// func WinnerGET(c *gin.Context) {
+// 	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY winner DESC")
+// }
+
+// func CategoryGET(c *gin.Context) {
+// 	order := convOrder(c.Query("order"))
+
+// 	category := c.Param("category")
+// 	if !category_contain(category) {
+// 		errorJson(c, "Invalid category", "Invalid category: "+category)
+// 	}
+
+// 	query := `
+// 	SELECT DISTINCT c1.id, name, winner, image_url, created_at, updated_at, limit_date, link, provider, way, is_oneclick
+// 	FROM contents c1
+// 	LEFT OUTER JOIN categories c2 ON c1.id = c2.id
+// 	WHERE category = '` + category + `' AND limit_date > CURRENT_TIMESTAMP
+// 	ORDER BY ` + order
+
+// 	generateJson(c, query)
+// }
+
 func SearchGET(c *gin.Context) {
+	addCORS(c)
 	_, err := strconv.Atoi(c.Param("id"))
 	if err != nil {
 		errorJson(c, "Invalid id", err.Error())
 	}
-	generateJson(c, "SELECT * FROM contents WHERE id = "+c.Param("id"))
+	generateJson(c, "SELECT * FROM contents WHERE id = "+c.Param("id"), true)
 }
 
-func TwitterGET(c *gin.Context) {
-	order := convOrder(c.Query("order"))
-	generateJson(c, "SELECT * FROM contents WHERE way = 'Twitter' AND limit_date > CURRENT_TIMESTAMP ORDER BY "+order)
-}
+// func TwitterGET(c *gin.Context) {
+// 	order := convOrder(c.Query("order"))
+// 	generateJson(c, "SELECT * FROM contents WHERE way = 'Twitter' AND limit_date > CURRENT_TIMESTAMP ORDER BY "+order)
+// }
 
 func TotalNumberGET(c *gin.Context) {
+	addCORS(c)
 	where := ""
 	var totalNumber uint
 	if c.Query("way") == "twitter" {
