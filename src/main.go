@@ -12,6 +12,7 @@ func main() {
 		api.GET("contents", controller.ContentsGET)
 		api.GET("search/:id", controller.SearchGET)
 		api.GET("total_number", controller.TotalNumberGET)
+		api.GET("/twitter_request_url", controller.TwitterRequestUrl)
 	}
 	router.Run(":9000")
 }
