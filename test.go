@@ -1,23 +1,19 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"encoding/json"
+	"os"
 )
 
-type user struct {
-	name string
-	age int
+type Person struct {
+	Name string
+	Age  int
 }
 
 func main() {
-	resp := `
-	{
-		name: "michiya",
-		age: 10
-	}
-	`
-	var u user
-	json.Unmarshal(byte[](resp), &u)
-	fmt.Println(u)
+	flags := flag.NewFlagSet("test", flag.ExitOnError)
+	c := flags.String("test", "pam", "test flag")
+	flags.Parse(os.Args[1:])
+	fmt.Println(*c)
 }

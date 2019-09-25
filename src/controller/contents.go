@@ -2,35 +2,54 @@ package controller
 
 import (
 	"database/sql"
+	"log"
 	"net/http"
-	"net/url"
 	"regexp"
+	"strings"
 	"time"
 
-	"errors"
-	"encoding/json"
-
 	// "encoding/base64"
-	"fmt"
 	"strconv"
 
 	"github.com/Michin0suke/prizz-api/src/model"
-	"github.com/astaxie/beego"
+	"github.com/Michin0suke/prizz-api/src/util"
+	gt "github.com/dghubble/go-twitter/twitter"
+	"github.com/dghubble/oauth1"
+	"github.com/dghubble/oauth1/twitter"
+	"github.com/gin-contrib/sessions"
 	"github.com/gin-gonic/gin"
 	"github.com/go-sql-driver/mysql"
-	"github.com/garyburd/go-oauth/oauth"
 )
 
+func setTwitterConfig() oauth1.Config {
+	flags := util.GetFlags()
+
+	if *flags.ConsumerKey == "" || *flags.ConsumerSecret == "" {
+		log.Fatal("Consumer key/secret required")
+	}
+
+	config := oauth1.Config{
+		ConsumerKey:    *flags.ConsumerKey,
+		ConsumerSecret: *flags.ConsumerSecret,
+		Endpoint:       twitter.AuthorizeEndpoint,
+	}
+
+	return config
+}
+
 func errorJson(c *gin.Context, s string, err string) {
-	c.JSON(http.StatusBadRequest, gin.H{"error": s})
+	c.JSON(http.StatusOK, gin.H{"error": s})
 	panic(err)
 }
 
 func addCORS(ctx *gin.Context) {
-	// ctx.Header("Access-Control-Allow-Origin", "*")
-	// ctx.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
-	// ctx.Header("Access-Control-Max-Age", "86400")
-	// ctx.Header("Access-Control-Allow-Headers", "Access-Control-Allow-Headers, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+	flags := util.GetFlags()
+	if *flags.Mode == "none" {
+		ctx.Header("Access-Control-Allow-Origin", "*")
+		ctx.Header("Access-Control-Allow-Methods", "POST, GET, OPTIONS, PUT, DELETE")
+		ctx.Header("Access-Control-Max-Age", "86400")
+		ctx.Header("Access-Control-Allow-Headers", "Access-Control-Allow-Headers, Content-Type, Content-Length, Accept-Encoding, X-CSRF-Token, Authorization")
+	}
 }
 
 func generateJSON(c *gin.Context, query string, isSearch bool) {
@@ -217,7 +236,7 @@ func convCategory(s string) string {
 func convOrder(order string) string {
 	switch order {
 	case "new":
-		return "created_at DESC"
+		return "updated_at DESC"
 	case "winner":
 		return "winner DESC"
 	default:
@@ -240,135 +259,22 @@ func ContentsGET(c *gin.Context) {
 		way = " AND way = '" + c.Query("way") + "'"
 	}
 
-	// if c.Query("way") != "" {
-	// 	r := regexp.MustCompile(`%`)
-
-	// 	if r.MatchString(c.Query("way")) {
-	// 		wayQuery, err := base64.StdEncoding.DecodeString(c.Query("way"))
-
-	// 		if err != nil {
-	// 			errorJson(c, "An error occurred when decode from base64", err.Error())
-	// 		} else {
-	// 			way = " AND way = '" + string(wayQuery) + "'"
-	// 		}
-
-	// 	} else {
-	// 		way = " AND way = '" + c.Query("way") + "'"
-	// 	}
-	// }
+	oneclick := ""
+	if c.Query("oneclick") == "true" {
+		oneclick = " AND is_oneclick = true "
+	} else if c.Query("oneclick") == "false" {
+		oneclick = " AND is_oneclick = false "
+	}
 
 	query := `
 	SELECT DISTINCT c1.id, name, winner, image_url, created_at, updated_at, limit_date, link, provider, way, is_oneclick 
 	FROM contents c1 
 	LEFT OUTER JOIN categories c2 ON c1.id = c2.id 
-	WHERE limit_date > CURRENT_TIMESTAMP ` + category + way + `
+	WHERE limit_date > CURRENT_TIMESTAMP ` + category + way + oneclick + `
 	ORDER BY ` + order
-
-	fmt.Println(query)
 
 	generateJSON(c, query, false)
 }
-
-var (
-	tempCredKey  string
-	tokenCredKey string
-)
-
-// Account is Twitter account data type
-type Account struct {
-	ID              string `json:"id_str"`
-	ScreenName      string `json:"screen_name"`
-	ProfileImageURL string `json:"profile_image_url"`
-	Email           string `json:"email"`
-}
-
-// GetConnect 接続を取得する
-func GetConnect() *oauth.Client {
-	tempCredKey = beego.AppConfig.String("twitterConsumerKey")
-	tokenCredKey = beego.AppConfig.String("twitterConsumerSecret")
-
-	return &oauth.Client{
-			TemporaryCredentialRequestURI: "https://api.twitter.com/oauth/request_token",
-			ResourceOwnerAuthorizationURI: "https://api.twitter.com/oauth/authorize",
-			TokenRequestURI:               "https://api.twitter.com/oauth/access_token",
-			Credentials: oauth.Credentials{
-					Token:  tempCredKey,
-					Secret: tokenCredKey,
-			},
-	}
-}
-
-// GetAccessToken アクセストークンを取得する
-func GetAccessToken(rt *oauth.Credentials, oauthVerifier string) (*oauth.Credentials, error) {
-	oc := GetConnect()
-	at, _, err := oc.RequestToken(nil, rt, oauthVerifier)
-
-	return at, err
-}
-
-// GetMe 自身を取得する
-func GetMe(at *oauth.Credentials, user *Account) error {
-	oc := GetConnect()
-
-	v := url.Values{}
-	// v.Set("include_email", "true")
-
-	resp, err := oc.Get(nil, at, "https://api.twitter.com/1.1/account/verify_credentials.json", v)
-	if err != nil {
-			return err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode >= 500 {
-			return errors.New("Twitter is unavailable")
-	}
-
-	if resp.StatusCode >= 400 {
-			return errors.New("Twitter request is invalid")
-	}
-
-	err = json.NewDecoder(resp.Body).Decode(user)
-	if err != nil {
-			return err
-	}
-
-	return nil
-}
-
-func TwitterRequestUrl(c *gin.Context) {
-	
-}
-
-// タスク一覧
-// func DeadlineGET(c *gin.Context) {
-// 	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY limit_date ASC")
-// }
-
-// func NewGET(c *gin.Context) {
-// 	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY created_at DESC")
-// }
-
-// func WinnerGET(c *gin.Context) {
-// 	generateJson(c, "SELECT * FROM contents WHERE limit_date > CURRENT_TIMESTAMP ORDER BY winner DESC")
-// }
-
-// func CategoryGET(c *gin.Context) {
-// 	order := convOrder(c.Query("order"))
-
-// 	category := c.Param("category")
-// 	if !category_contain(category) {
-// 		errorJson(c, "Invalid category", "Invalid category: "+category)
-// 	}
-
-// 	query := `
-// 	SELECT DISTINCT c1.id, name, winner, image_url, created_at, updated_at, limit_date, link, provider, way, is_oneclick
-// 	FROM contents c1
-// 	LEFT OUTER JOIN categories c2 ON c1.id = c2.id
-// 	WHERE category = '` + category + `' AND limit_date > CURRENT_TIMESTAMP
-// 	ORDER BY ` + order
-
-// 	generateJson(c, query)
-// }
 
 func SearchGET(c *gin.Context) {
 	addCORS(c)
@@ -378,11 +284,6 @@ func SearchGET(c *gin.Context) {
 	}
 	generateJSON(c, "SELECT * FROM contents WHERE id = "+c.Param("id"), true)
 }
-
-// func TwitterGET(c *gin.Context) {
-// 	order := convOrder(c.Query("order"))
-// 	generateJson(c, "SELECT * FROM contents WHERE way = 'Twitter' AND limit_date > CURRENT_TIMESTAMP ORDER BY "+order)
-// }
 
 func TotalNumberGET(c *gin.Context) {
 	addCORS(c)
@@ -404,6 +305,200 @@ func TotalNumberGET(c *gin.Context) {
 	}
 	defer db.Close()
 	c.JSON(http.StatusOK, gin.H{"total_number": totalNumber})
+}
+
+func TwitterLogin(c *gin.Context) {
+	config := setTwitterConfig()
+
+	session := sessions.Default(c)
+	accessToken := session.Get("access_token")
+	accessSecret := session.Get("access_secret")
+
+	if accessToken == nil || accessSecret == nil {
+		requestToken, requestSecret, _ := config.RequestToken()
+		session.Set("request_secret", requestSecret)
+		session.Save()
+		c.Redirect(http.StatusFound, "https://api.twitter.com/oauth/authenticate?oauth_token="+requestToken)
+	} else {
+		c.Redirect(http.StatusFound, "https://prizz.jp/")
+	}
+}
+
+func TwitterCallback(c *gin.Context) {
+	config := setTwitterConfig()
+	oauthToken := c.Query("oauth_token")
+	oauthVerifier := c.Query("oauth_verifier")
+	session := sessions.Default(c)
+	requestSecret := session.Get("request_secret").(string)
+	accessToken, accessSecret, _ := config.AccessToken(oauthToken, requestSecret, oauthVerifier)
+	session.Set("access_token", accessToken)
+	session.Set("access_secret", accessSecret)
+	session.Save()
+	flags := util.GetFlags()
+	if *flags.Mode == "development" {
+		c.Redirect(http.StatusFound, "https://dev.prizz.jp/")
+	} else {
+		c.Redirect(http.StatusFound, "https://prizz.jp/")
+	}
+}
+
+func TwitterFollow(c *gin.Context) {
+	configb := setTwitterConfig()
+	consumerKey := &configb.ConsumerKey
+	consumerSecret := &configb.ConsumerSecret
+	session := sessions.Default(c)
+	accessToken := session.Get("access_token")
+	accessSecret := session.Get("access_secret")
+	if accessToken == nil || accessSecret == nil {
+		errorJson(c, "Invalid access token/secret.", "Invalid access token/secret.")
+	}
+	config := oauth1.NewConfig(*consumerKey, *consumerSecret)
+	token := oauth1.NewToken(accessToken.(string), accessSecret.(string))
+	httpClient := config.Client(oauth1.NoContext, token)
+	client := gt.NewClient(httpClient)
+
+	followParam := &gt.FriendshipCreateParams{}
+	userID, err := strconv.ParseInt(c.Param("user_param"), 10, 64)
+	if err != nil && strings.Contains(c.Param("user_param"), "@") {
+		followParam.ScreenName = c.Param("user_param")
+	} else if err != nil {
+		errorJson(c, "The param is not valid.", err.Error())
+	} else {
+		followParam.UserID = userID
+	}
+	_, _, err = client.Friendships.Create(followParam)
+	if err != nil {
+		errorJson(c, "You have already done any actions to this Tweet", err.Error())
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "success"})
+}
+
+func TwitterRetweet(c *gin.Context) {
+	configb := setTwitterConfig()
+	consumerKey := &configb.ConsumerKey
+	consumerSecret := &configb.ConsumerSecret
+	session := sessions.Default(c)
+	accessToken := session.Get("access_token")
+	accessSecret := session.Get("access_secret")
+	if accessToken == nil || accessSecret == nil {
+		errorJson(c, "Invalid access token/secret.", "Invalid access token/secret.")
+	}
+	config := oauth1.NewConfig(*consumerKey, *consumerSecret)
+	token := oauth1.NewToken(accessToken.(string), accessSecret.(string))
+	httpClient := config.Client(oauth1.NoContext, token)
+
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		errorJson(c, "The param is not valid.", err.Error())
+	}
+	client := gt.NewClient(httpClient)
+	_, _, err = client.Statuses.Retweet(id, nil)
+	if err != nil {
+		errorJson(c, "You have already done any actions to this Tweet", err.Error())
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "success"})
+}
+
+func TwitterFavorite(c *gin.Context) {
+	configb := setTwitterConfig()
+	consumerKey := &configb.ConsumerKey
+	consumerSecret := &configb.ConsumerSecret
+	session := sessions.Default(c)
+	accessToken := session.Get("access_token")
+	accessSecret := session.Get("access_secret")
+	if accessToken == nil || accessSecret == nil {
+		errorJson(c, "Invalid access token/secret.", "Invalid access token/secret.")
+	}
+	config := oauth1.NewConfig(*consumerKey, *consumerSecret)
+	token := oauth1.NewToken(accessToken.(string), accessSecret.(string))
+	httpClient := config.Client(oauth1.NoContext, token)
+	client := gt.NewClient(httpClient)
+
+	favoriteParam := &gt.FavoriteCreateParams{}
+	id, err := strconv.ParseInt(c.Param("id"), 10, 64)
+	if err != nil {
+		errorJson(c, "The param is not valid.", err.Error())
+	} else {
+		favoriteParam.ID = id
+	}
+	_, _, err = client.Favorites.Create(favoriteParam)
+	if err != nil {
+		errorJson(c, "You have already done any actions to this Tweet", err.Error())
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "success"})
+}
+
+func TwitterReply(c *gin.Context) {
+	configb := setTwitterConfig()
+	consumerKey := &configb.ConsumerKey
+	consumerSecret := &configb.ConsumerSecret
+	session := sessions.Default(c)
+	accessToken := session.Get("access_token")
+	accessSecret := session.Get("access_secret")
+	if accessToken == nil || accessSecret == nil {
+		errorJson(c, "Invalid access token/secret.", "Invalid access token/secret.")
+	}
+	config := oauth1.NewConfig(*consumerKey, *consumerSecret)
+	token := oauth1.NewToken(accessToken.(string), accessSecret.(string))
+	httpClient := config.Client(oauth1.NoContext, token)
+	client := gt.NewClient(httpClient)
+
+	status := c.PostForm("status")
+	tweetParam := &gt.StatusUpdateParams{}
+	id, err := strconv.ParseInt(c.PostForm("id"), 10, 64)
+	if err != nil {
+		errorJson(c, "The param is not valid.", err.Error())
+	}
+	tweetParam.InReplyToStatusID = id
+	_, _, err = client.Statuses.Update(status, tweetParam)
+	if err != nil {
+		errorJson(c, "You have already done any actions to this Tweet", err.Error())
+	}
+	c.JSON(http.StatusOK, map[string]string{"status": "success"})
+}
+
+type IsLoggedIn struct {
+	IsLoggedIn bool        `json:"is_logged_in"`
+	User       interface{} `json:"user"`
+}
+
+func boolPointer(b bool) *bool {
+	return &b
+}
+
+func TwitterIsLoggedIn(c *gin.Context) {
+	configb := setTwitterConfig()
+	consumerKey := &configb.ConsumerKey
+	consumerSecret := &configb.ConsumerSecret
+
+	session := sessions.Default(c)
+	accessToken := session.Get("access_token")
+	accessSecret := session.Get("access_secret")
+
+	res := IsLoggedIn{}
+
+	if accessToken != nil && accessSecret != nil {
+		res.IsLoggedIn = true
+
+		config := oauth1.NewConfig(*consumerKey, *consumerSecret)
+		token := oauth1.NewToken(accessToken.(string), accessSecret.(string))
+		httpClient := config.Client(oauth1.NoContext, token)
+
+		client := gt.NewClient(httpClient)
+		// params := gt.AccountVerifyParams{
+		// 	IncludeEntities: boolPointer(true),
+		// 	SkipStatus: boolPointer(false),
+		// 	IncludeEmail: boolPointer(false),
+		// }
+		user, _, err := client.Accounts.VerifyCredentials(nil)
+		if err != nil || user == nil {
+			errorJson(c, "Can not get varify credentials.", err.Error())
+		}
+		res.User = user
+	} else {
+		res.IsLoggedIn = false
+	}
+	c.JSON(http.StatusOK, res)
 }
 
 /*
