@@ -21,3 +21,7 @@ func DBConnect() (db *sql.DB) {
 	}
 	return db
 }
+
+// twitterKeys := {
+// 	""
+// }
